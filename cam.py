@@ -18,20 +18,11 @@ from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', type=str, default='cpu',
-                        help='Torch device to use')
-    parser.add_argument(
-        '--image-path',
-        type=str,
-        default='./examples/both.png',
-        help='Input image path')
-    parser.add_argument('--aug-smooth', action='store_true',
-                        help='Apply test time augmentation to smooth the CAM')
-    parser.add_argument(
-        '--eigen-smooth',
-        action='store_true',
-        help='Reduce noise by taking the first principle component'
-        'of cam_weights*activations')
+    parser.add_argument('--device', type=str, default='cpu', help='Torch device to use')
+    parser.add_argument('--image-path', type=str, default='./examples/both.png', help='Input image path')
+    parser.add_argument('--aug-smooth', action='store_true', help='Apply test time augmentation to smooth the CAM')
+    parser.add_argument('--eigen-smooth', action='store_true',
+                        help='Reduce noise by taking the first principle component' 'of cam_weights*activations')
     parser.add_argument('--method', type=str, default='gradcam',
                         choices=[
                             'gradcam', 'hirescam', 'gradcam++',
@@ -41,10 +32,9 @@ def get_args():
                         ],
                         help='CAM method')
 
-    parser.add_argument('--output-dir', type=str, default='output',
-                        help='Output directory to save the images')
+    parser.add_argument('--output-dir', type=str, default='output', help='Output directory to save the images')
     args = parser.parse_args()
-    
+
     if args.device:
         print(f'Using device "{args.device}" for acceleration')
     else:
@@ -77,9 +67,6 @@ if __name__ == '__main__':
         'kpcacam': KPCA_CAM
     }
 
-    if args.device=='hpu':
-        import habana_frameworks.torch.core as htcore
-
     model = models.resnet50(pretrained=True).to(torch.device(args.device)).eval()
 
     # Choose the target layer you want to compute the visualization for.
@@ -94,7 +81,7 @@ if __name__ == '__main__':
     # You can also try selecting all layers of a certain type, with e.g:
     # from pytorch_grad_cam.utils.find_layers import find_layer_types_recursive
     # find_layer_types_recursive(model, [torch.nn.ReLU])
-    
+
     target_layers = [model.layer4]
 
     rgb_img = cv2.imread(args.image_path, 1)[:, :, ::-1]
@@ -108,15 +95,14 @@ if __name__ == '__main__':
     # If targets is None, the highest scoring category (for every member in the batch) will be used.
     # You can target specific categories by
     # targets = [ClassifierOutputTarget(281)]
-    # targets = [ClassifierOutputTarget(281)]
-    targets = None
+    targets = [ClassifierOutputTarget(281)]
+    # targets = None
 
     # Using the with statement ensures the context is freed, and you can
     # recreate different CAM objects in a loop.
     cam_algorithm = methods[args.method]
     with cam_algorithm(model=model,
                        target_layers=target_layers) as cam:
-
         # AblationCAM and ScoreCAM have batched implementations.
         # You can override the internal batch size for faster computation.
         cam.batch_size = 32
@@ -130,11 +116,20 @@ if __name__ == '__main__':
         cam_image = show_cam_on_image(rgb_img, grayscale_cam, use_rgb=True)
         cam_image = cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
 
+    # Guided Backpropagation 是一種可視化技術，它通過對模型進行反向傳播，生成對輸入圖像的梯度，並只保留對模型分類有正貢獻的激活。
     gb_model = GuidedBackpropReLUModel(model=model, device=args.device)
+
+    # 計算 Guided Backpropagation 梯度
     gb = gb_model(input_tensor, target_category=None)
 
+    # 生成 Grad-CAM 的三通道掩碼
     cam_mask = cv2.merge([grayscale_cam, grayscale_cam, grayscale_cam])
+
+    # cam_mask * gb： 將 Grad-CAM 的熱力圖（強調模型關注區域）與 Guided Backpropagation 的梯度進行逐像素相乘。
+    # deprocess_image： 將輸出的梯度圖進行後處理，轉換為易於人類理解的圖像格式（如範圍 [0, 255] 的 RGB 圖像）
     cam_gb = deprocess_image(cam_mask * gb)
+
+    # 將純 Guided Backpropagation 的梯度圖處理為可視化圖像格式。
     gb = deprocess_image(gb)
 
     os.makedirs(args.output_dir, exist_ok=True)
